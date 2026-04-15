@@ -12,7 +12,7 @@ const winston = require('winston');
 const z = require('zod');
 const admin = require('firebase-admin');
 const nodemailer = require('nodemailer');
-// const db = require('./schema');
+// Removed SQLite
 const firestore = admin.apps.length ? admin.firestore() : null;
 const db = {
   run: (query, params, cb) => {
