@@ -13,12 +13,17 @@ const z = require('zod');
 const admin = require('firebase-admin');
 const nodemailer = require('nodemailer');
 // const db = require('./schema');
-const firestore = admin.firestore();
+const firestore = admin.apps.length ? admin.firestore() : null;
 const db = {
   run: (query, params, cb) => {
-    // Legacy mock for logs/notifications that don't need real-time sync for now
     if (cb) cb(null);
   }
+};
+
+// Helper to get firestore safely
+const getFirestore = () => {
+    if (!admin.apps.length) throw new Error("Firebase not initialized. Check your FIREBASE_SERVICE_ACCOUNT env var on Vercel.");
+    return admin.firestore();
 };
 
 const app = express();
@@ -252,7 +257,7 @@ app.post('/api/auth/firebase', loginLimiter, async (req, res) => {
 
     const username = email.split('@')[0];
 
-    const usersRef = firestore.collection('Users');
+    const usersRef = getFirestore().collection('Users');
     const snapshot = await usersRef.where('firebase_uid', '==', uid).get();
     let user = !snapshot.empty ? { id: snapshot.docs[0].id, ...snapshot.docs[0].data() } : null;
 
@@ -351,7 +356,7 @@ app.post('/api/auth/register', async (req, res) => {
   const { username, email, password } = req.body;
   const ip = req.ip;
 
-  const firestoreUser = await firestore.collection('Users').where('email', '==', email).get();
+  const firestoreUser = await getFirestore().collection('Users').where('email', '==', email).get();
   if (!firestoreUser.empty) return res.status(400).json({ error: 'Email already registered' });
 
   const hash = await bcrypt.hash(password, 10);
@@ -365,7 +370,7 @@ app.post('/api/auth/register', async (req, res) => {
   };
 
   try {
-    const docRef = await firestore.collection('Users').add(newUser);
+    const docRef = await getFirestore().collection('Users').add(newUser);
     const userId = docRef.id;
     const token = jwt.sign({ id: userId, role, username, email }, JWT_SECRET, { expiresIn: '12h' });
     
@@ -380,7 +385,7 @@ app.post('/api/auth/login', loginLimiter, (req, res) => {
     const { email, password } = req.body;
     const ip = req.ip;
 
-    const usersRef = firestore.collection('Users');
+    const usersRef = getFirestore().collection('Users');
     const snapshot = await usersRef.where('email', '==', email).get();
     
     if (snapshot.empty) {
@@ -430,7 +435,7 @@ app.post('/api/listings/submit', authenticateToken, (req, res) => {
       total_rentals: 0, created_at: admin.firestore.FieldValue.serverTimestamp()
     };
 
-    firestore.collection('Listings').add(newListing)
+    getFirestore().collection('Listings').add(newListing)
       .then(docRef => res.json({ success: true, listingId: docRef.id }))
       .catch(err => res.status(500).json({ error: err.message }));
 });
@@ -512,7 +517,7 @@ app.post('/api/admin/listings/:id/reject', authenticateToken, requireAdmin, (req
 
 app.get('/api/listings', (req, res) => {
   try {
-    const listingsRef = firestore.collection('Listings');
+    const listingsRef = getFirestore().collection('Listings');
     const snapshot = await listingsRef.where('status', '==', 'approved').where('is_active', '==', true).get();
     
     const listings = snapshot.docs.map(doc => {
@@ -532,7 +537,7 @@ app.get('/api/listings', (req, res) => {
 
 app.get('/api/listings/:id', async (req, res) => {
     try {
-        const doc = await firestore.collection('Listings').doc(req.params.id).get();
+        const doc = await getFirestore().collection('Listings').doc(req.params.id).get();
         if (!doc.exists) return res.status(404).json({ error: 'Not found' });
         
         const row = { id: doc.id, ...doc.data() };
