@@ -1,0 +1,223 @@
+/* ═══════════════════════════════════════════════
+   Admin Panel Styles
+   ═══════════════════════════════════════════════ */
+
+.admin-page {
+  padding-top: calc(var(--nav-height) + var(--gap-xl));
+  min-height: 100vh;
+  padding-bottom: var(--gap-2xl);
+}
+
+/* ── Admin Stats ──────────────────────────────── */
+.admin-stats {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: var(--gap-md);
+  margin-bottom: var(--gap-xl);
+}
+
+.admin-stat {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 20px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  transition: all var(--dur-normal) var(--ease-out);
+}
+
+.admin-stat:hover {
+  background: var(--bg-card-hover);
+  transform: translateY(-1px);
+}
+
+.admin-stat-icon {
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  flex-shrink: 0;
+}
+
+.admin-stat-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.admin-stat-val {
+  font-size: 1.4rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.admin-stat-label {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+/* ── Activity List ────────────────────────────── */
+.admin-activity h3 {
+  margin-bottom: var(--gap-lg);
+}
+
+.activity-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.activity-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.activity-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-blue);
+  margin-top: 6px;
+  flex-shrink: 0;
+}
+
+.activity-info {
+  flex: 1;
+}
+
+.activity-action {
+  font-size: 0.9rem;
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+
+.activity-details {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.activity-user,
+.activity-listing {
+  color: var(--accent-blue);
+}
+
+.activity-reason {
+  color: var(--accent-amber);
+}
+
+.activity-time {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* ── Pending Listings ─────────────────────────── */
+.pending-listings h3 {
+  margin-bottom: var(--gap-lg);
+}
+
+.pending-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+  gap: var(--gap-lg);
+}
+
+.pending-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: var(--gap-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.pending-card--flagged {
+  border-color: rgba(245, 158, 11, 0.3);
+  background: rgba(245, 158, 11, 0.03);
+}
+
+.pending-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.pending-card__header h4 {
+  margin-bottom: 8px;
+}
+
+.pending-card__meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.flag-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-amber-soft);
+  color: var(--accent-amber);
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.pending-card__pricing {
+  display: flex;
+  gap: var(--gap-lg);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.pending-card__seller {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.pending-date {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.pending-card__actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* ── Admin Users ──────────────────────────────── */
+.admin-users h3 {
+  margin-bottom: var(--gap-lg);
+}
+
+.users-table-wrap {
+  overflow-x: auto;
+}
+
+/* ── Responsive ───────────────────────────────── */
+@media (max-width: 1200px) {
+  .admin-stats { grid-template-columns: repeat(3, 1fr); }
+}
+
+@media (max-width: 768px) {
+  .admin-stats { grid-template-columns: 1fr; }
+  .pending-grid { grid-template-columns: 1fr; }
+}

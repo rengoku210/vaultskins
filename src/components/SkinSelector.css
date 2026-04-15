@@ -1,0 +1,222 @@
+/* ── SkinSelector ─────────────────────────────────── */
+
+.vs-skin-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  position: relative;
+}
+
+/* Chips — selected skins */
+.vs-skin-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.vs-skin-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 6px;
+  background: var(--accent-red-soft);
+  border: 1px solid var(--border-accent);
+  border-radius: 100px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  animation: fadeInUp 0.2s var(--ease-out) forwards;
+}
+
+.vs-skin-chip__img {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+  border-radius: 3px;
+}
+
+.vs-skin-chip__name {
+  max-width: 130px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vs-skin-chip__remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-secondary);
+  transition: all var(--dur-fast) ease;
+  flex-shrink: 0;
+}
+.vs-skin-chip__remove:hover {
+  background: rgba(200, 60, 74, 0.25);
+  color: var(--accent-red);
+}
+
+/* Search */
+.vs-skin-search-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.vs-skin-search-inner {
+  position: relative;
+}
+
+.vs-skin-search-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.vs-skin-search-input {
+  padding-left: 40px !important;
+}
+
+/* Quick filters */
+.vs-skin-quick-filters {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.vs-quick-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.vs-quick-tag {
+  padding: 3px 10px;
+  border-radius: 100px;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  transition: all var(--dur-fast) ease;
+}
+.vs-quick-tag:hover {
+  border-color: var(--accent-red);
+  color: var(--accent-red);
+  background: var(--accent-red-soft);
+}
+
+/* Dropdown */
+.vs-skin-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 200;
+  margin-top: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  animation: fadeIn 0.15s ease forwards;
+}
+
+.vs-skin-dropdown__status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 20px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.vs-skin-dropdown__status--error {
+  color: var(--accent-red);
+  flex-direction: column;
+  gap: 8px;
+}
+
+.vs-skin-dropdown__list {
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Each skin option */
+.vs-skin-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  transition: all var(--dur-fast) ease;
+  color: var(--text-primary);
+}
+.vs-skin-option:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.vs-skin-option--selected {
+  background: var(--accent-red-soft);
+  border: 1px solid var(--border-accent);
+}
+
+.vs-skin-option__img-wrap {
+  width: 38px;
+  height: 38px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.vs-skin-option__img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  padding: 3px;
+}
+
+.vs-skin-option__info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.vs-skin-option__name {
+  font-size: 0.82rem;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vs-skin-option__weapon {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+.vs-skin-option__check {
+  color: var(--accent-red);
+  flex-shrink: 0;
+}
+
+/* Count label */
+.vs-skin-count {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
