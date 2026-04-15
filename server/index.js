@@ -48,20 +48,23 @@ const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || crypto.randomBytes(32).toSt
 const ADMIN_EMAIL = 'rammodhvadiya210@gmail.com';
 
 // Initialize Firebase Admin (Mock/Bypass if credentials unprovided for local dev)
-try {
-  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-    admin.initializeApp({
-      credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT))
-    });
-  } else {
-    // If running in a GCP environment it might work without args, 
-    // but locally we should avoid crashing if no config is available.
+// Initialize Firebase Admin Safely
+if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+  try {
+    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
     if (!admin.apps.length) {
-      admin.initializeApp();
+      admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount)
+      });
+      logger.info("Firebase Admin initialized via environment variable.");
     }
+  } catch (e) {
+    logger.error("Failed to parse FIREBASE_SERVICE_ACCOUNT JSON. Check Vercel settings.");
   }
-} catch (e) {
-  logger.warn("Firebase Admin failed to initialize. Firebase Auth will use fallback decoding.");
+} else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    if (!admin.apps.length) admin.initializeApp();
+} else {
+    logger.warn("No Firebase credentials provided. Backend will use fallback/mock database.");
 }
 
 const apiLimiter = rateLimit({ 
