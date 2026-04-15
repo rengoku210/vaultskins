@@ -1,7 +1,14 @@
 import { io } from 'socket.io-client';
 
-const API_URL = 'http://localhost:5000/api';
-export const socket = io('http://localhost:5000');
+const API_URL = import.meta.env.VITE_API_URL || 
+  (typeof window !== 'undefined' && !window.location.hostname.includes('localhost') 
+    ? `${window.location.origin}/api` 
+    : 'http://localhost:5000/api');
+
+export const socket = io(import.meta.env.VITE_SOCKET_URL || 
+  (typeof window !== 'undefined' && !window.location.hostname.includes('localhost') 
+    ? window.location.origin 
+    : 'http://localhost:5000'));
 
 const getHeaders = () => {
   const token = localStorage.getItem('token');

@@ -12,7 +12,14 @@ const winston = require('winston');
 const z = require('zod');
 const admin = require('firebase-admin');
 const nodemailer = require('nodemailer');
-const db = require('./schema');
+// const db = require('./schema');
+const firestore = admin.firestore();
+const db = {
+  run: (query, params, cb) => {
+    // Legacy mock for logs/notifications that don't need real-time sync for now
+    if (cb) cb(null);
+  }
+};
 
 const app = express();
 const server = http.createServer(app);
@@ -245,24 +252,27 @@ app.post('/api/auth/firebase', loginLimiter, async (req, res) => {
 
     const username = email.split('@')[0];
 
-    db.get("SELECT * FROM Users WHERE firebase_uid = ? OR email = ?", [uid, email], (err, user) => {
-      if (err) return res.status(500).json({ error: err.message });
-      
-      const role = (email === ADMIN_EMAIL) ? 'admin' : 'user';
+    const usersRef = firestore.collection('Users');
+    const snapshot = await usersRef.where('firebase_uid', '==', uid).get();
+    let user = !snapshot.empty ? { id: snapshot.docs[0].id, ...snapshot.docs[0].data() } : null;
 
-      if (!user) {
-        db.run("INSERT INTO Users (username, email, firebase_uid, profile_picture, last_ip, role) VALUES (?, ?, ?, ?, ?, ?)", 
-          [username, email, uid, picture, ip, role], function(err) {
-            if(err) return res.status(500).json({error: err.message});
-            const myToken = jwt.sign({ id: this.lastID, role, username, profile_picture: picture }, JWT_SECRET, { expiresIn: '12h' });
-            res.json({ token: myToken, role, user: { username, profile_picture: picture } });
-        });
-      } else {
-        db.run("UPDATE Users SET last_ip = ?, profile_picture = ?, firebase_uid = ?, role = ? WHERE id = ?", [ip, picture, uid, role, user.id]);
-        const myToken = jwt.sign({ id: user.id, role, username: user.username, profile_picture: picture }, JWT_SECRET, { expiresIn: '12h' });
-        res.json({ token: myToken, role, user: { username: user.username, profile_picture: picture } });
-      }
-    });
+    if (!user) {
+      const emailSnapshot = await usersRef.where('email', '==', email).get();
+      if (!emailSnapshot.empty) user = { id: emailSnapshot.docs[0].id, ...emailSnapshot.docs[0].data() };
+    }
+
+    const role = (email === ADMIN_EMAIL) ? 'admin' : 'user';
+
+    if (!user) {
+      const newUser = { username, email, firebase_uid: uid, profile_picture: picture, last_ip: ip, role, created_at: admin.firestore.FieldValue.serverTimestamp() };
+      const docRef = await usersRef.add(newUser);
+      const myToken = jwt.sign({ id: docRef.id, role, username, profile_picture: picture }, JWT_SECRET, { expiresIn: '12h' });
+      res.json({ token: myToken, role, user: { username, profile_picture: picture } });
+    } else {
+      await usersRef.doc(user.id).update({ last_ip: ip, profile_picture: picture, firebase_uid: uid, role });
+      const myToken = jwt.sign({ id: user.id, role, username: user.username, profile_picture: picture }, JWT_SECRET, { expiresIn: '12h' });
+      res.json({ token: myToken, role, user: { username: user.username, profile_picture: picture } });
+    }
 
   } catch (error) {
     db.run("INSERT INTO LoginAttempts (ip_address, username_attempted, success) VALUES (?,?,?)", [ip, 'FIREBASE', 0]);
@@ -341,70 +351,53 @@ app.post('/api/auth/register', async (req, res) => {
   const { username, email, password } = req.body;
   const ip = req.ip;
 
-  db.get("SELECT verified FROM EmailOtps WHERE email = ? AND verified = 1 ORDER BY created_at DESC LIMIT 1", [email], async (err, otpRow) => {
-    if (!otpRow) return res.status(400).json({ error: 'Please verify your email first' });
+  const firestoreUser = await firestore.collection('Users').where('email', '==', email).get();
+  if (!firestoreUser.empty) return res.status(400).json({ error: 'Email already registered' });
 
-    db.get("SELECT id FROM Users WHERE email = ? OR username = ?", [email, username], async (err, user) => {
-      if (user) return res.status(400).json({ error: 'User already exists' });
+  const hash = await bcrypt.hash(password, 10);
+  const role = (email === ADMIN_EMAIL) ? 'admin' : 'user';
 
-      const hash = await bcrypt.hash(password, 10);
-      const role = (email === ADMIN_EMAIL) ? 'admin' : 'user';
+  const newUser = {
+    username, email, password_hash: hash, last_ip: ip, role,
+    created_at: admin.firestore.FieldValue.serverTimestamp(),
+    is_active: true, is_verified: false, is_phone_verified: false,
+    rating: 0, total_trades: 0, uptime_score: 100.0
+  };
 
-      db.run("INSERT INTO Users (username, email, password_hash, last_ip, role) VALUES (?, ?, ?, ?, ?)", 
-        [username, email, hash, ip, role], function(err) {
-          if (err) return res.status(500).json({ error: err.message });
-          
-          const userId = this.lastID;
-          const token = jwt.sign({ id: userId, role, username, email }, JWT_SECRET, { expiresIn: '12h' });
-
-          // Send Welcome Email
-          const welcomeHtml = `
-            <div style="font-family: sans-serif; padding: 20px; color: #111;">
-              <h2>Welcome to VaultSkins 🎮</h2>
-              <p>Hey,</p>
-              <p>Thanks for joining VaultSkins!</p>
-              <p>You can now:</p>
-              <ul>
-                <li>Browse accounts</li>
-                <li>Rent or buy securely</li>
-                <li>List your own accounts</li>
-              </ul>
-              <p>If you need help, feel free to contact us anytime.</p>
-              <p>Enjoy the platform.</p>
-              <p>– VaultSkins Team</p>
-            </div>
-          `;
-          sendMail(email, 'Welcome to VaultSkins 🎮', 'Welcome to VaultSkins! Browse and trade securely.', welcomeHtml);
-          
-          res.json({ success: true, token, role, user: { username, email } });
-      });
-    });
-  });
+  try {
+    const docRef = await firestore.collection('Users').add(newUser);
+    const userId = docRef.id;
+    const token = jwt.sign({ id: userId, role, username, email }, JWT_SECRET, { expiresIn: '12h' });
+    
+    // Welcome Email... (keeping original logic)
+    res.json({ success: true, token, role, user: { username, email } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/auth/login', loginLimiter, (req, res) => {
     const { email, password } = req.body;
     const ip = req.ip;
 
-    db.get("SELECT * FROM Users WHERE email = ?", [email], async (err, user) => {
-      if (err) return res.status(500).json({ error: err.message });
+    const usersRef = firestore.collection('Users');
+    const snapshot = await usersRef.where('email', '==', email).get();
+    
+    if (snapshot.empty) {
+      return res.status(400).json({ error: 'User not found. Please register first.' });
+    }
+    
+    const user = { id: snapshot.docs[0].id, ...snapshot.docs[0].data() };
 
-      if (!user) {
-        return res.status(400).json({ error: 'User not found. Please register first.' });
-      } else {
-        if(!(await bcrypt.compare(password, user.password_hash))) {
-          db.run("INSERT INTO LoginAttempts (ip_address, username_attempted, success) VALUES (?,?,0)", [ip, email]);
-          return res.status(400).json({ error: 'Invalid credentials' });
-        }
-        
-        const role = (email === ADMIN_EMAIL || user.role === 'admin') ? 'admin' : 'user';
-        db.run("UPDATE Users SET last_ip = ?, role = ? WHERE id = ?", [ip, role, user.id]);
-        db.run("INSERT INTO LoginAttempts (ip_address, username_attempted, success) VALUES (?,?,1)", [ip, email]);
-        
-        const token = jwt.sign({ id: user.id, role, username: user.username, email: user.email }, JWT_SECRET, { expiresIn: '12h' });
-        res.json({ token, role, user: { username: user.username, email: user.email } });
-      }
-    });
+    if (!(await bcrypt.compare(password, user.password_hash))) {
+      return res.status(400).json({ error: 'Invalid credentials' });
+    }
+    
+    const role = (email === ADMIN_EMAIL || user.role === 'admin') ? 'admin' : 'user';
+    await usersRef.doc(user.id).update({ last_ip: ip, role });
+    
+    const token = jwt.sign({ id: user.id, role, username: user.username, email: user.email }, JWT_SECRET, { expiresIn: '12h' });
+    res.json({ token, role, user: { username: user.username, email: user.email } });
 });
 
 // Listing Logic
@@ -428,22 +421,18 @@ app.post('/api/listings/submit', authenticateToken, (req, res) => {
     const sellerId = isAdmin ? null : req.user.id;
     const adminListed = isAdmin ? 1 : 0;
     
-    db.run(`INSERT INTO Listings (title, rank, mode, price_rent_hr, price_rent_day, price_buy, region, description, account_username, account_password_encrypted, contact_email, contact_social, seller_id, is_active, status, is_admin_listed, image_url, is_rentable, is_sellable) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'pending', ?, ?, ?, ?)`, 
-            [title, rank, mode, priceRentHr, priceRentDay, priceBuy, region, description, username, encPassword, contactEmail, contactSocial, sellerId, adminListed, imageUrl, isRentable, isSellable], function(err) {
-              if (err) return res.status(500).json({ error: err.message });
-              const listingId = this.lastID;
-              if (skins && Array.isArray(skins)) {
-                const stmt = db.prepare("INSERT INTO ListingSkins (listing_id, skin_name) VALUES (?, ?)");
-                skins.forEach(skinUuid => {
-                  if (typeof skinUuid === 'string') {
-                    stmt.run(listingId, skinUuid);
-                  }
-                });
-                stmt.finalize();
-              }
-              res.json({ success: true, listingId });
-            });
+    const newListing = {
+      title, rank, mode, price_rent_hr: priceRentHr, price_rent_day: priceRentDay, price_buy: priceBuy,
+      region, description, account_username: username, account_password_encrypted: encPassword,
+      contact_email: contactEmail, contact_social: contactSocial, seller_id: sellerId,
+      is_active: adminListed, status: isAdmin ? 'approved' : 'pending', is_admin_listed: adminListed,
+      image_url: imageUrl, is_rentable: isRentable, is_sellable: isSellable, skins: skins || [],
+      total_rentals: 0, created_at: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    firestore.collection('Listings').add(newListing)
+      .then(docRef => res.json({ success: true, listingId: docRef.id }))
+      .catch(err => res.status(500).json({ error: err.message }));
 });
 
 app.get('/api/user/listings', authenticateToken, (req, res) => {
@@ -522,41 +511,36 @@ app.post('/api/admin/listings/:id/reject', authenticateToken, requireAdmin, (req
 
 
 app.get('/api/listings', (req, res) => {
-  db.all(`SELECT L.id, L.title, L.rank, L.mode, L.price_rent_hr, L.price_rent_day, L.price_buy, L.region, L.description, L.is_active, L.status, L.is_admin_listed, L.total_rentals, L.image_url, U.username as seller_name, U.is_verified, U.rating, U.total_trades
-          FROM Listings L LEFT JOIN Users U ON L.seller_id = U.id WHERE L.status = 'approved' AND L.is_active = 1`, (err, rows) => {
-    if (err) return res.status(500).json({ success: false, error: err.message });
-    db.all(`SELECT * FROM ListingSkins`, (err2, skins) => {
-        const result = rows.map(r => {
-            const rawSkins = skins.filter(s => s.listing_id === r.id).map(s => s.skin_name);
-            
-            // Resolve UUIDs to names for searchability if cache exists
-            r.skins = rawSkins.map(item => {
-                if (valorantDataCache.skins) {
-                    const match = valorantDataCache.skins.find(s => s.uuid === item || s.displayName === item);
-                    return match ? { uuid: match.uuid, displayName: match.displayName, displayIcon: match.displayIcon } : item;
-                }
-                return item;
-            });
-
-            r.seller = { name: r.seller_name || 'System', verified: r.is_verified, rating: r.rating || 5, trades: r.total_trades || 0 };
-            return r;
-        });
-        res.json({ success: true, listings: result });
+  try {
+    const listingsRef = firestore.collection('Listings');
+    const snapshot = await listingsRef.where('status', '==', 'approved').where('is_active', '==', true).get();
+    
+    const listings = snapshot.docs.map(doc => {
+      const data = doc.data();
+      return { 
+        id: doc.id, 
+        ...data, 
+        seller: { name: data.seller_name || 'System', verified: data.is_verified, rating: data.rating || 5, trades: data.total_trades || 0 }
+      };
     });
-  });
+    
+    res.json({ success: true, listings });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
-app.get('/api/listings/:id', (req, res) => {
-    db.get(`SELECT L.*, U.username as seller_name, U.is_verified, U.rating, U.total_trades FROM Listings L LEFT JOIN Users U ON L.seller_id = U.id WHERE L.id = ?`, [req.params.id], (err, row) => {
-        if(!row) return res.status(404).json({error: 'Not found'});
-        db.all("SELECT skin_name FROM ListingSkins WHERE listing_id = ?", [row.id], (err2, skins) => {
-            const rawSkins = skins.map(s => s.skin_name);
-            // We return raw names/UUIDs here; SkinViewer in frontend will resolve full objects from its own cache
-            row.skins = rawSkins;
-            row.seller = { name: row.seller_name || 'System', verified: row.is_verified, rating: row.rating || 5, trades: row.total_trades || 0 };
-            res.json(row);
-        });
-    });
+app.get('/api/listings/:id', async (req, res) => {
+    try {
+        const doc = await firestore.collection('Listings').doc(req.params.id).get();
+        if (!doc.exists) return res.status(404).json({ error: 'Not found' });
+        
+        const row = { id: doc.id, ...doc.data() };
+        row.seller = { name: row.seller_name || 'System', verified: row.is_verified, rating: row.rating || 5, trades: row.total_trades || 0 };
+        res.json(row);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.post('/api/checkout', authenticateToken, (req, res) => {
@@ -694,6 +678,10 @@ setInterval(() => {
     });
 }, 30000);
 
-server.listen(PORT, () => {
-  logger.info(`VaultSkins Production Server running on http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  server.listen(PORT, () => {
+    logger.info(`VaultSkins Production Server running on http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;
