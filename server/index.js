@@ -51,11 +51,18 @@ const ADMIN_EMAIL = 'rammodhvadiya210@gmail.com';
 let serviceAccount;
 try {
   if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-    logger.info("Found FIREBASE_SERVICE_ACCOUNT env var.");
+    const raw = process.env.FIREBASE_SERVICE_ACCOUNT.trim();
+    if (raw.startsWith('{')) {
+      serviceAccount = JSON.parse(raw);
+      logger.info("Found valid-looking JSON in FIREBASE_SERVICE_ACCOUNT.");
+    } else if (raw.includes('require') || raw.includes('var ')) {
+      logger.error("❌ CRITICAL: FIREBASE_SERVICE_ACCOUNT contains JavaScript code, not JSON. Please provide the JSON format from the Firebase Console.");
+    } else {
+      logger.error("❌ CRITICAL: FIREBASE_SERVICE_ACCOUNT is not in JSON format.");
+    }
   }
 } catch (err) {
-  logger.error("❌ Firebase JSON parse failed. Check if FIREBASE_SERVICE_ACCOUNT is valid JSON.");
+  logger.error("❌ Firebase JSON parse failed. Ensure your Vercel environment variable is the raw JSON string.");
   console.error(err);
 }
 
@@ -201,6 +208,16 @@ let valorantDataCache = {
 io.on('connection', (socket) => {
     logger.info(`Client connected: ${socket.id}`);
     socket.on('disconnect', () => logger.info(`Client disconnected: ${socket.id}`));
+});
+
+// ── Health Check ──
+app.get('/api', (req, res) => {
+  res.json({ 
+    status: "API WORKING", 
+    timestamp: new Date().toISOString(),
+    environment: process.env.VERCEL ? 'production' : 'development',
+    firebase_init: admin.apps.length > 0
+  });
 });
 
 // ── API Routes ──
