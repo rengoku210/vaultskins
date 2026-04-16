@@ -1,17 +1,17 @@
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const crypto = require('crypto');
-const http = require('http');
-const { Server } = require('socket.io');
-const rateLimit = require('express-rate-limit');
-const helmet = require('helmet');
-const winston = require('winston');
-const z = require('zod');
-const admin = require('firebase-admin');
-const nodemailer = require('nodemailer');
+import 'dotenv/config';
+import express from 'express';
+import cors from 'cors';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
+import http from 'http';
+import { Server } from 'socket.io';
+import rateLimit from 'express-rate-limit';
+import helmet from 'helmet';
+import winston from 'winston';
+import { z } from 'zod';
+import admin from 'firebase-admin';
+import nodemailer from 'nodemailer';
 // Removed SQLite
 const firestore = admin.apps.length ? admin.firestore() : null;
 const db = {
@@ -47,24 +47,34 @@ const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_valorant_key_2026';
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || crypto.randomBytes(32).toString('hex');
 const ADMIN_EMAIL = 'rammodhvadiya210@gmail.com';
 
-// Initialize Firebase Admin (Mock/Bypass if credentials unprovided for local dev)
-// Initialize Firebase Admin Safely
-if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-  try {
-    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-    if (!admin.apps.length) {
+// ── Initialize Firebase Admin Safely ──
+let serviceAccount;
+try {
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+    logger.info("Found FIREBASE_SERVICE_ACCOUNT env var.");
+  }
+} catch (err) {
+  logger.error("❌ Firebase JSON parse failed. Check if FIREBASE_SERVICE_ACCOUNT is valid JSON.");
+  console.error(err);
+}
+
+if (!admin.apps.length) {
+  if (serviceAccount) {
+    try {
       admin.initializeApp({
         credential: admin.credential.cert(serviceAccount)
       });
-      logger.info("Firebase Admin initialized via environment variable.");
+      logger.info("Firebase Admin initialized via cert.");
+    } catch (e) {
+      logger.error("❌ Firebase init with cert failed:", e.message);
     }
-  } catch (e) {
-    logger.error("Failed to parse FIREBASE_SERVICE_ACCOUNT JSON. Check Vercel settings.");
+  } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    admin.initializeApp();
+    logger.info("Firebase Admin initialized via GOOGLE_APPLICATION_CREDENTIALS.");
+  } else {
+    logger.warn("⚠️ No Firebase credentials found. Backend running in restricted mode.");
   }
-} else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-    if (!admin.apps.length) admin.initializeApp();
-} else {
-    logger.warn("No Firebase credentials provided. Backend will use fallback/mock database.");
 }
 
 const apiLimiter = rateLimit({ 
@@ -807,10 +817,6 @@ setInterval(async () => {
     }
 }, 30000);
 
-if (require.main === module) {
-  server.listen(PORT, () => {
-    logger.info(`VaultSkins Production Server running on http://localhost:${PORT}`);
-  });
-}
-
-module.exports = app;
+// Removed server.listen for Vercel compatibility
+// Export the app for Vercel/Entry points
+export default app;
