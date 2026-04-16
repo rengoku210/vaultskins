@@ -21,7 +21,20 @@ const getHeaders = () => {
 const handleRequest = async (promise) => {
   try {
     const response = await promise;
-    const data = await response.json();
+    const contentType = response.headers.get('content-type');
+    
+    let data;
+    if (contentType && contentType.includes('application/json')) {
+      data = await response.json();
+    } else {
+      const text = await response.text();
+      console.warn('Non-JSON response received:', text);
+      return { 
+        error: response.ok ? 'Received invalid data format' : `Server Error: ${response.status}`, 
+        success: false 
+      };
+    }
+
     if (!response.ok) {
       return { error: data.error || 'Request failed', success: false };
     }
@@ -30,6 +43,9 @@ const handleRequest = async (promise) => {
     if (data && typeof data === 'object' && 'success' in data) return data;
     return { ...data, success: true };
   } catch (err) {
+    if (err.name === 'SyntaxError') {
+      return { error: 'Invalid response from server. Please try again later.', success: false };
+    }
     if (err.name === 'TypeError' && err.message.includes('fetch')) {
       return { error: 'Server unreachable. Please ensure the backend is running.', success: false, isServerDown: true };
     }

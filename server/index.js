@@ -125,17 +125,36 @@ function requireAdmin(req, res, next) {
   else res.status(403).json({ error: 'Admin access required' });
 }
 
-function logAudit(adminId, action, targetType, targetId, details) {
-  db.run("INSERT INTO AuditLogs (admin_id, action, target_type, target_id, details) VALUES (?, ?, ?, ?, ?)", 
-         [adminId, action, targetType, targetId, details]);
-  io.emit('admin_activity', { action, targetType, time: new Date() });
+async function logAudit(adminId, action, targetType, targetId, details) {
+  try {
+    await getFirestore().collection('AuditLogs').add({
+      admin_id: adminId,
+      action,
+      target_type: targetType,
+      target_id: targetId,
+      details,
+      created_at: admin.firestore.FieldValue.serverTimestamp()
+    });
+    io.emit('admin_activity', { action, targetType, time: new Date() });
+  } catch (err) {
+    logger.error('Audit Log Error:', err);
+  }
 }
 
-function createNotification(userId, title, message, type = 'info') {
-  db.run("INSERT INTO Notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)", [userId, title, message, type], (err) => {
-    if (err) logger.error(`Failed to create notification for user ${userId}: ${err.message}`);
-    else io.emit('new_notification', { userId, title, message, type });
-  });
+async function createNotification(userId, title, message, type = 'info') {
+  try {
+    await getFirestore().collection('Notifications').add({
+      user_id: userId,
+      title,
+      message,
+      type,
+      is_read: 0,
+      created_at: admin.firestore.FieldValue.serverTimestamp()
+    });
+    io.emit('new_notification', { userId, title, message, type });
+  } catch (err) {
+    logger.error(`Failed to create notification for user ${userId}: ${err.message}`);
+  }
 }
 
 // ── Email Transporter ──
@@ -297,62 +316,78 @@ app.post('/api/auth/request-email-otp', otpLimiter, async (req, res) => {
     return res.status(400).json({ error: 'Valid email required' });
   }
 
-  db.get("SELECT id FROM Users WHERE email = ?", [email], async (err, user) => {
-    if (err) {
-      logger.error('DB Error in request-email-otp:', err);
-      return res.status(500).json({ error: 'Database error' });
-    }
-    if (user) return res.status(400).json({ error: 'Email already registered' });
+  try {
+    const usersRef = getFirestore().collection('Users');
+    const userSnapshot = await usersRef.where('email', '==', email).get();
+    
+    if (!userSnapshot.empty) return res.status(400).json({ error: 'Email already registered' });
 
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const otpHash = await bcrypt.hash(otp, 10);
-    const expiresAt = new Date(Date.now() + 5 * 60000).toISOString();
+    const expiresAt = admin.firestore.Timestamp.fromDate(new Date(Date.now() + 5 * 60000));
 
-    db.run("INSERT INTO EmailOtps (email, otp_hash, expires_at) VALUES (?, ?, ?)", [email, otpHash, expiresAt], (err) => {
-      if (err) return res.status(500).json({ error: err.message });
-
-      const emailHtml = `
-        <div style="font-family: sans-serif; padding: 20px; color: #111;">
-          <h2>Verify Your VaultSkins Account</h2>
-          <p>Hey,</p>
-          <p>Your verification code is:</p>
-          <div style="font-size: 24px; font-weight: bold; background: #f4f4f4; padding: 15px; border-radius: 8px; text-align: center; margin: 20px 0;">
-            🔐 ${otp}
-          </div>
-          <p>This code will expire in 5 minutes.</p>
-          <p>If you didn't request this, you can ignore this email.</p>
-          <p>– VaultSkins Team</p>
-        </div>
-      `;
-
-      sendMail(email, 'Verify Your VaultSkins Account', `Your verification code is: ${otp}`, emailHtml);
-      console.log(`\n-----------------------------------------`);
-      console.log(`[AUTH] OTP for ${email}: ${otp}`);
-      console.log(`-----------------------------------------\n`);
-      res.json({ success: true, message: 'OTP sent successfully' });
+    await getFirestore().collection('EmailOtps').add({
+      email,
+      otp_hash: otpHash,
+      expires_at: expiresAt,
+      verified: 0,
+      attempts: 0,
+      created_at: admin.firestore.FieldValue.serverTimestamp()
     });
-  });
+
+    const emailHtml = `
+      <div style="font-family: sans-serif; padding: 20px; color: #111;">
+        <h2>Verify Your VaultSkins Account</h2>
+        <p>Hey,</p>
+        <p>Your verification code is:</p>
+        <div style="font-size: 24px; font-weight: bold; background: #f4f4f4; padding: 15px; border-radius: 8px; text-align: center; margin: 20px 0;">
+          🔐 ${otp}
+        </div>
+        <p>This code will expire in 5 minutes.</p>
+        <p>If you didn't request this, you can ignore this email.</p>
+        <p>– VaultSkins Team</p>
+      </div>
+    `;
+
+    sendMail(email, 'Verify Your VaultSkins Account', `Your verification code is: ${otp}`, emailHtml);
+    res.json({ success: true, message: 'OTP sent successfully' });
+  } catch (err) {
+    logger.error('Request OTP Error:', err);
+    res.status(500).json({ error: 'Failed to process request' });
+  }
 });
 
 app.post('/api/auth/verify-email-otp', async (req, res) => {
   const { email, otp } = req.body;
-  const now = new Date().toISOString();
+  
+  try {
+    const otpSnapshot = await getFirestore().collection('EmailOtps')
+      .where('email', '==', email)
+      .where('verified', '==', 0)
+      .where('expires_at', '>', admin.firestore.Timestamp.now())
+      .orderBy('expires_at', 'desc')
+      .limit(1)
+      .get();
 
-  db.get("SELECT * FROM EmailOtps WHERE email = ? AND verified = 0 AND expires_at > ? ORDER BY created_at DESC LIMIT 1", [email, now], async (err, row) => {
-    if (!row) return res.status(400).json({ error: 'OTP expired or not found' });
+    if (otpSnapshot.empty) return res.status(400).json({ error: 'OTP expired or not found' });
+    
+    const doc = otpSnapshot.docs[0];
+    const row = doc.data();
+
     if (row.attempts >= 3) return res.status(400).json({ error: 'Too many attempts. Request a new OTP.' });
 
     const match = await bcrypt.compare(otp, row.otp_hash);
     if (!match) {
-      db.run("UPDATE EmailOtps SET attempts = attempts + 1 WHERE id = ?", [row.id]);
+      await doc.ref.update({ attempts: admin.firestore.FieldValue.increment(1) });
       return res.status(400).json({ error: 'Invalid OTP' });
     }
 
-    db.run("UPDATE EmailOtps SET verified = 1 WHERE id = ?", [row.id], (err) => {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json({ success: true, message: 'Email verified' });
-    });
-  });
+    await doc.ref.update({ verified: 1 });
+    res.json({ success: true, message: 'Email verified' });
+  } catch (err) {
+    logger.error('Verify OTP Error:', err);
+    res.status(500).json({ error: 'Failed to verify OTP' });
+  }
 });
 
 app.post('/api/auth/register', async (req, res) => {
@@ -384,7 +419,7 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-app.post('/api/auth/login', loginLimiter, (req, res) => {
+app.post('/api/auth/login', loginLimiter, async (req, res) => {
     const { email, password } = req.body;
     const ip = req.ip;
 
@@ -443,82 +478,110 @@ app.post('/api/listings/submit', authenticateToken, (req, res) => {
       .catch(err => res.status(500).json({ error: err.message }));
 });
 
-app.get('/api/user/listings', authenticateToken, (req, res) => {
-    db.all("SELECT * FROM Listings WHERE seller_id = ?", [req.user.id], (err, rows) => {
-        if (err) return res.status(500).json({ success: false, error: err.message });
-        res.json({ success: true, listings: rows });
-    });
+app.get('/api/user/listings', authenticateToken, async (req, res) => {
+    try {
+        const snapshot = await getFirestore().collection('Listings').where('seller_id', '==', req.user.id).get();
+        const listings = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        res.json({ success: true, listings });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 });
 
-app.get('/api/user/profile', authenticateToken, (req, res) => {
-  db.get("SELECT username, email, role, is_active, is_verified, is_phone_verified, terms_accepted, profile_picture, rating, total_trades, uptime_score, created_at FROM Users WHERE id = ?", [req.user.id], (err, user) => {
-     if (err) return res.status(500).json({ error: err.message });
-     if (!user) return res.status(404).json({ error: 'User not found' });
-     res.json(user);
-  });
+app.get('/api/user/profile', authenticateToken, async (req, res) => {
+  try {
+    const doc = await getFirestore().collection('Users').doc(req.user.id).get();
+    if (!doc.exists) return res.status(404).json({ error: 'User not found' });
+    res.json({ id: doc.id, ...doc.data() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.post('/api/user/accept-terms', authenticateToken, (req, res) => {
-  db.run("UPDATE Users SET terms_accepted = 1 WHERE id = ?", [req.user.id], (err) => {
-    if (err) return res.status(500).json({ error: err.message });
+app.post('/api/user/accept-terms', authenticateToken, async (req, res) => {
+  try {
+    await getFirestore().collection('Users').doc(req.user.id).update({ terms_accepted: 1 });
     res.json({ success: true });
-  });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.post('/api/user/verify-phone', authenticateToken, (req, res) => {
-  db.run("UPDATE Users SET is_phone_verified = 1 WHERE id = ?", [req.user.id], (err) => {
-    if (err) return res.status(500).json({ error: err.message });
-    createNotification(req.user.id, "Phone Verified", "Your phone number has been successfully verified.", "success");
+app.post('/api/user/verify-phone', authenticateToken, async (req, res) => {
+  try {
+    await getFirestore().collection('Users').doc(req.user.id).update({ is_phone_verified: 1 });
+    await createNotification(req.user.id, "Phone Verified", "Your phone number has been successfully verified.", "success");
     res.json({ success: true });
-  });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.get('/api/notifications', authenticateToken, (req, res) => {
-  db.all("SELECT * FROM Notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50", [req.user.id], (err, rows) => {
-    if (err) return res.status(500).json({ success: false, error: err.message });
-    res.json({ success: true, notifications: rows });
-  });
+app.get('/api/notifications', authenticateToken, async (req, res) => {
+  try {
+    const snapshot = await getFirestore().collection('Notifications')
+      .where('user_id', '==', req.user.id)
+      .orderBy('created_at', 'desc')
+      .limit(50)
+      .get();
+    const notifications = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    res.json({ success: true, notifications });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
-app.post('/api/notifications/read/:id', authenticateToken, (req, res) => {
-  db.run("UPDATE Notifications SET is_read = 1 WHERE id = ? AND user_id = ?", [req.params.id, req.user.id], (err) => {
-    if (err) return res.status(500).json({ error: err.message });
+app.post('/api/notifications/read/:id', authenticateToken, async (req, res) => {
+  try {
+    await getFirestore().collection('Notifications').doc(req.params.id).update({ is_read: 1 });
     res.json({ success: true });
-  });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.post('/api/admin/listings/:id/approve', authenticateToken, requireAdmin, (req, res) => {
-    db.run("UPDATE Listings SET is_active = 1, status = 'approved', is_admin_listed = 1 WHERE id = ?", [req.params.id], function(err) {
-        if (err) return res.status(500).json({ error: err.message });
+app.post('/api/admin/listings/:id/approve', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const listingRef = getFirestore().collection('Listings').doc(req.params.id);
+        const doc = await listingRef.get();
+        if (!doc.exists) return res.status(404).json({ error: 'Listing not found' });
         
-        db.get("SELECT seller_id, title FROM Listings WHERE id = ?", [req.params.id], (err2, listing) => {
-          if (listing && listing.seller_id) {
-            createNotification(listing.seller_id, "Listing Approved", `Your listing "${listing.title}" has been approved and is now live.`, "success");
-          }
-        });
+        const listing = doc.data();
+        await listingRef.update({ is_active: 1, status: 'approved', is_admin_listed: 1 });
+        
+        if (listing.seller_id) {
+          await createNotification(listing.seller_id, "Listing Approved", `Your listing "${listing.title}" has been approved and is now live.`, "success");
+        }
 
-        logAudit(req.user.id, 'Approve Listing', 'Listing', req.params.id, 'Listing approved and activated');
+        await logAudit(req.user.id, 'Approve Listing', 'Listing', req.params.id, 'Listing approved and activated');
         res.json({ success: true });
-    });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-app.post('/api/admin/listings/:id/reject', authenticateToken, requireAdmin, (req, res) => {
-    db.get("SELECT seller_id, title FROM Listings WHERE id = ?", [req.params.id], (err, listing) => {
-      db.run("UPDATE Listings SET is_active = 0, status = 'rejected' WHERE id = ?", [req.params.id], function(err2) {
-          if (err2) return res.status(500).json({ error: err2.message });
+app.post('/api/admin/listings/:id/reject', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const listingRef = getFirestore().collection('Listings').doc(req.params.id);
+        const doc = await listingRef.get();
+        if (!doc.exists) return res.status(404).json({ error: 'Listing not found' });
+        
+        const listing = doc.data();
+        await listingRef.update({ is_active: 0, status: 'rejected' });
+        
+        if (listing.seller_id) {
+          await createNotification(listing.seller_id, "Listing Rejected", `Your listing "${listing.title}" was rejected by the moderation team.`, "error");
+        }
 
-          if (listing && listing.seller_id) {
-            createNotification(listing.seller_id, "Listing Rejected", `Your listing "${listing.title}" was rejected by the moderation team.`, "error");
-          }
-
-          logAudit(req.user.id, 'Reject Listing', 'Listing', req.params.id, 'Listing rejected');
-          res.json({ success: true });
-      });
-    });
+        await logAudit(req.user.id, 'Reject Listing', 'Listing', req.params.id, 'Listing rejected');
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 
-app.get('/api/listings', (req, res) => {
+app.get('/api/listings', async (req, res) => {
   try {
     const listingsRef = getFirestore().collection('Listings');
     const snapshot = await listingsRef.where('status', '==', 'approved').where('is_active', '==', true).get();
@@ -551,139 +614,197 @@ app.get('/api/listings/:id', async (req, res) => {
     }
 });
 
-app.post('/api/checkout', authenticateToken, (req, res) => {
+app.post('/api/checkout', authenticateToken, async (req, res) => {
   const { listingId, type, durationHours, amount } = req.body; 
   
-  db.serialize(() => {
-    db.run("BEGIN EXCLUSIVE TRANSACTION");
-
-    db.get("SELECT is_active FROM Listings WHERE id = ?", [listingId], (err, row) => {
-      if (err) {
-        db.run("ROLLBACK");
-        return res.status(500).json({ error: err.message });
-      }
-      if (!row || row.is_active === 0) {
-        db.run("ROLLBACK");
-        return res.status(400).json({ success: false, error: 'Listing is currently locked or already rented/sold.' });
+  try {
+    const result = await getFirestore().runTransaction(async (transaction) => {
+      const listingRef = getFirestore().collection('Listings').doc(listingId);
+      const listingDoc = await transaction.get(listingRef);
+      
+      if (!listingDoc.exists || listingDoc.data().is_active === 0) {
+        throw new Error('Listing is currently locked or already rented/sold.');
       }
 
-      db.run("INSERT INTO Transactions (user_id, listing_id, amount, tx_type) VALUES (?, ?, ?, ?)", [req.user.id, listingId, amount, type], function(err) {
-          if (err) {
-             db.run("ROLLBACK");
-             return res.status(500).json({ error: err.message });
-          }
-          
-          const txId = this.lastID;
-          if (type === 'rent') {
-              const startTime = new Date();
-              const endTime = new Date(startTime.getTime() + (durationHours * 60 * 60 * 1000) + (10 * 60 * 1000));
-              
-              db.run("INSERT INTO Rentals (listing_id, user_id, transaction_id, start_time, end_time, status) VALUES (?, ?, ?, ?, ?, ?)", 
-                     [listingId, req.user.id, txId, startTime.toISOString(), endTime.toISOString(), 'active'], (err) => {
-                         if (err) { db.run("ROLLBACK"); return res.status(500).json({ error: err.message }); }
-                         
-                         db.run("UPDATE Listings SET total_rentals = total_rentals + 1, is_active = 0 WHERE id = ?", [listingId]);
-                         db.run("UPDATE Users SET total_trades = total_trades + 1 WHERE id = ?", [req.user.id]);
-                         
-                         db.run("COMMIT", () => {
-                             io.emit('rental_started', { listingId, message: `Account locked for ${durationHours}h + 10m cooldown.` });
-                             res.json({ success: true, message: 'Payment verified. Rental active with cooldown buffer.' });
-                         });
-                     });
-          } else {
-              db.run("UPDATE Listings SET is_active = 0 WHERE id = ?", [listingId], (err) => {
-                  if (err) { db.run("ROLLBACK"); return; }
-                  db.run("COMMIT", () => {
-                      createNotification(req.user.id, "Purchase Successful", "You have successfully purchased this account.", "success");
-                      db.get("SELECT seller_id, title FROM Listings WHERE id = ?", [listingId], (err, listing) => {
-                        if (listing && listing.seller_id) {
-                          createNotification(listing.seller_id, "Item Sold", `Your listing "${listing.title}" has been sold!`, "success");
-                        }
-                      });
-                      res.json({ success: true, message: 'Purchase successful. Account locked.' });
-                  });
-              });
-          }
+      const txRef = getFirestore().collection('Transactions').doc();
+      transaction.set(txRef, {
+        user_id: req.user.id,
+        listing_id: listingId,
+        amount,
+        tx_type: type,
+        created_at: admin.firestore.FieldValue.serverTimestamp()
       });
-    });
-  });
-});
 
-app.get('/api/user/dashboard', authenticateToken, (req, res) => {
-  const now = new Date().toISOString();
-  db.run("UPDATE Rentals SET status = 'expired' WHERE end_time < ? AND status = 'active'", [now], () => {
-      db.all(`SELECT R.id, L.title, L.rank, R.start_time, R.end_time, R.status, L.account_username, L.account_password_encrypted 
-              FROM Rentals R JOIN Listings L ON R.listing_id = L.id WHERE R.user_id = ? ORDER BY R.start_time DESC`, [req.user.id], (err, rows) => {
-          const rentals = rows.map(r => ({
-              id: r.id, title: r.title, rank: r.rank, startTime: r.start_time, endTime: r.end_time, status: r.status,
-              credentials: r.status === 'active' ? { username: r.account_username, password: decrypt(r.account_password_encrypted) } : null
-          }));
-          res.json({ rentals });
-      });
-  });
-});
-
-app.get('/api/admin/dashboard', authenticateToken, requireAdmin, (req, res) => {
-   db.all("SELECT SUM(amount) as total_earnings FROM Transactions", (err, earnings) => {
-      db.all("SELECT * FROM Listings", (err2, listings) => {
-          res.json({ earnings: earnings[0].total_earnings || 0, listings });
-      });
-   });
-});
-
-app.get('/api/admin/users', authenticateToken, requireAdmin, (req, res) => {
-    db.all("SELECT id, username, email, role, is_active, is_verified, rating, total_trades, created_at FROM Users", (err, users) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ users });
-    });
-});
-
-app.post('/api/admin/users/:id/verify', authenticateToken, requireAdmin, (req, res) => {
-    db.get("SELECT is_verified FROM Users WHERE id = ?", [req.params.id], (err, user) => {
-        if (err) return res.status(500).json({ error: err.message });
-        if (!user) return res.status(404).json({ error: 'User not found' });
+      if (type === 'rent') {
+        const startTime = new Date();
+        const endTime = new Date(startTime.getTime() + (durationHours * 60 * 60 * 1000) + (10 * 60 * 1000));
         
-        const newStatus = user.is_verified ? 0 : 1;
-        db.run("UPDATE Users SET is_verified = ? WHERE id = ?", [newStatus, req.params.id], function(err) {
-            if (err) return res.status(500).json({ error: err.message });
-            res.json({ success: true, is_verified: newStatus });
+        const rentalRef = getFirestore().collection('Rentals').doc();
+        transaction.set(rentalRef, {
+          listing_id: listingId,
+          user_id: req.user.id,
+          transaction_id: txRef.id,
+          start_time: startTime.toISOString(),
+          end_time: endTime.toISOString(),
+          status: 'active',
+          created_at: admin.firestore.FieldValue.serverTimestamp()
         });
+
+        transaction.update(listingRef, { 
+          total_rentals: admin.firestore.FieldValue.increment(1),
+          is_active: 0 
+        });
+      } else {
+        transaction.update(listingRef, { is_active: 0 });
+      }
+
+      const userRef = getFirestore().collection('Users').doc(req.user.id);
+      transaction.update(userRef, { total_trades: admin.firestore.FieldValue.increment(1) });
+
+      return { type, durationHours };
     });
+
+    if (result.type === 'rent') {
+      io.emit('rental_started', { listingId, message: `Account locked for ${result.durationHours}h + 10m cooldown.` });
+      res.json({ success: true, message: 'Payment verified. Rental active with cooldown buffer.' });
+    } else {
+      await createNotification(req.user.id, "Purchase Successful", "You have successfully purchased this account.", "success");
+      const listingDoc = await getFirestore().collection('Listings').doc(listingId).get();
+      const listing = listingDoc.data();
+      if (listing && listing.seller_id) {
+        await createNotification(listing.seller_id, "Item Sold", `Your listing "${listing.title}" has been sold!`, "success");
+      }
+      res.json({ success: true, message: 'Purchase successful. Account locked.' });
+    }
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
 });
 
-app.get('/api/stats', (req, res) => {
-    db.serialize(() => {
-        let stats = { users: 0, trades: 0, volume: 0 };
-        db.get("SELECT COUNT(*) as count FROM Users", (err, row) => {
-            if (row) stats.users = row.count;
-            db.get("SELECT COUNT(*) as count FROM Transactions", (err, row2) => {
-                if (row2) stats.trades = row2.count;
-                db.get("SELECT SUM(amount) as volume FROM Transactions", (err, row3) => {
-                    if (row3) stats.volume = row3.volume || 0;
-                    res.json(stats);
-                });
-            });
-        });
-    });
-});
-
-setInterval(() => {
+app.get('/api/user/dashboard', authenticateToken, async (req, res) => {
+  try {
     const now = new Date().toISOString();
-    db.all("SELECT id, listing_id FROM Rentals WHERE end_time < ? AND status = 'active'", [now], (err, rows) => {
-        if (!rows || rows.length === 0) return;
-        db.serialize(() => {
-            db.run("BEGIN TRANSACTION");
-            rows.forEach(r => {
-                db.run("UPDATE Rentals SET status = 'expired' WHERE id = ?", [r.id]);
-                const newPassword = encrypt(crypto.randomBytes(8).toString('hex'));
-                db.run("UPDATE Listings SET account_password_encrypted = ?, is_active = 1 WHERE id = ?", [newPassword, r.listing_id]);
-            });
-            db.run("COMMIT", () => {
-                logger.info(`Rotated credentials and unlocked ${rows.length} expired rentals.`);
-                io.emit('rentals_expired', { count: rows.length });
-            });
-        });
+    const rentalsRef = getFirestore().collection('Rentals');
+    const rentalsSnapshot = await rentalsRef.where('user_id', '==', req.user.id).orderBy('start_time', 'desc').get();
+    
+    const rentals = await Promise.all(rentalsSnapshot.docs.map(async (doc) => {
+      const r = doc.data();
+      let status = r.status;
+      if (status === 'active' && r.end_time < now) {
+        status = 'expired';
+        await doc.ref.update({ status: 'expired' });
+      }
+
+      const listingDoc = await getFirestore().collection('Listings').doc(r.listing_id).get();
+      const l = listingDoc.data() || {};
+
+      return {
+        id: doc.id,
+        title: l.title || 'Unknown Listing',
+        rank: l.rank || 'Unranked',
+        startTime: r.start_time,
+        endTime: r.end_time,
+        status: status,
+        credentials: status === 'active' ? { 
+          username: l.account_username, 
+          password: decrypt(l.account_password_encrypted) 
+        } : null
+      };
+    }));
+
+    res.json({ rentals });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/dashboard', authenticateToken, requireAdmin, async (req, res) => {
+   try {
+     const transactionsSnapshot = await getFirestore().collection('Transactions').get();
+     let earnings = 0;
+     transactionsSnapshot.forEach(doc => { earnings += Number(doc.data().amount || 0); });
+     
+     const listingsSnapshot = await getFirestore().collection('Listings').get();
+     const listings = listingsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+     
+     res.json({ earnings, listings });
+   } catch (err) {
+     res.status(500).json({ error: err.message });
+   }
+});
+
+app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const snapshot = await getFirestore().collection('Users').get();
+        const users = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        res.json({ users });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/admin/users/:id/verify', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const userRef = getFirestore().collection('Users').doc(req.params.id);
+        const doc = await userRef.get();
+        if (!doc.exists) return res.status(404).json({ error: 'User not found' });
+        
+        const newStatus = doc.data().is_verified ? 0 : 1;
+        await userRef.update({ is_verified: newStatus });
+        res.json({ success: true, is_verified: newStatus });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/stats', async (req, res) => {
+  try {
+    const usersCount = (await getFirestore().collection('Users').count().get()).data().count;
+    const transactionsSnapshot = await getFirestore().collection('Transactions').get();
+    
+    let trades = 0;
+    let volume = 0;
+    
+    transactionsSnapshot.forEach(doc => {
+      trades++;
+      volume += Number(doc.data().amount || 0);
     });
+
+    res.json({ users: usersCount, trades, volume });
+  } catch (err) {
+    logger.error('Stats Error:', err);
+    res.json({ users: 0, trades: 0, volume: 0 }); // Fallback
+  }
+});
+
+setInterval(async () => {
+    try {
+        const now = new Date().toISOString();
+        const rentalsSnapshot = await getFirestore().collection('Rentals')
+            .where('end_time', '<', now)
+            .where('status', '==', 'active')
+            .get();
+
+        if (rentalsSnapshot.empty) return;
+
+        for (const doc of rentalsSnapshot.docs) {
+            const r = doc.data();
+            await doc.ref.update({ status: 'expired' });
+            
+            const newPasswordRaw = crypto.randomBytes(8).toString('hex');
+            const newPasswordEnc = encrypt(newPasswordRaw);
+            
+            await getFirestore().collection('Listings').doc(r.listing_id).update({
+                account_password_encrypted: newPasswordEnc,
+                is_active: 1
+            });
+        }
+        
+        logger.info(`Rotated credentials and unlocked ${rentalsSnapshot.size} expired rentals.`);
+        io.emit('rentals_expired', { count: rentalsSnapshot.size });
+    } catch (err) {
+        logger.error('Credential Rotation Error:', err);
+    }
 }, 30000);
 
 if (require.main === module) {
